@@ -2,7 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>ReflectAI Journal</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Merriweather:ital,wght@0,300;0,400;0,700;1,400&display=swap" rel="stylesheet">
@@ -28,11 +28,38 @@
             animation: {
               'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
               'glow': 'glow 2s ease-in-out infinite alternate',
+              'slide-up': 'slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+              'slide-down': 'slideDown 0.4s cubic-bezier(0.16, 1, 0.3, 1)',
+              'fade-in': 'fadeIn 0.3s ease-out',
+              'scale-in': 'scaleIn 0.2s ease-out',
+              'blob': 'blob 7s infinite',
             },
             keyframes: {
               glow: {
                 '0%': { boxShadow: '0 0 5px #6366f1' },
                 '100%': { boxShadow: '0 0 20px #06b6d4' },
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              slideDown: {
+                 '0%': { transform: 'translateY(-20px)', opacity: '0' },
+                 '100%': { transform: 'translateY(0)', opacity: '1' },
+              },
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              scaleIn: {
+                '0%': { transform: 'scale(0.95)', opacity: '0' },
+                '100%': { transform: 'scale(1)', opacity: '1' },
+              },
+              blob: {
+                "0%": { transform: "translate(0px, 0px) scale(1)" },
+                "33%": { transform: "translate(30px, -50px) scale(1.1)" },
+                "66%": { transform: "translate(-20px, 20px) scale(0.9)" },
+                "100%": { transform: "translate(0px, 0px) scale(1)" }
               }
             }
           }
@@ -42,11 +69,12 @@
     <style>
       body {
         transition: background-color 0.3s ease, color 0.3s ease;
+        overscroll-behavior-y: none; /* Prevent pull-to-refresh on mobile */
       }
       /* Custom scrollbar for cleaner look */
       ::-webkit-scrollbar {
-        width: 6px;
-        height: 6px;
+        width: 4px;
+        height: 4px;
       }
       ::-webkit-scrollbar-track {
         background: transparent;
@@ -55,23 +83,42 @@
         background: #475569;
         border-radius: 4px;
       }
-      ::-webkit-scrollbar-thumb:hover {
-        background: #64748b;
-      }
       
       .glass-panel {
         background: rgba(255, 255, 255, 0.7);
-        backdrop-filter: blur(12px);
-        -webkit-backdrop-filter: blur(12px);
-        border: 1px solid rgba(255, 255, 255, 0.3);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.5);
       }
       
       .dark .glass-panel {
         background: rgba(15, 23, 42, 0.6);
-        border: 1px solid rgba(255, 255, 255, 0.05);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+      }
+
+      /* Mobile safe area utilities */
+      .pb-safe {
+        padding-bottom: env(safe-area-inset-bottom);
+      }
+      .pt-safe {
+        padding-top: env(safe-area-inset-top);
+      }
+      
+      /* Hide scrollbar for clean UI */
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+
+      /* Button press effect */
+      .btn-press:active {
+        transform: scale(0.96);
       }
     </style>
-  <script type="importmap">
+<script type="importmap">
 {
   "imports": {
     "react": "https://aistudiocdn.com/react@^19.2.1",
@@ -83,7 +130,7 @@
 }
 </script>
 </head>
-  <body class="bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-gray-100 antialiased selection:bg-indigo-500 selection:text-white">
-    <div id="root"></div>
+  <body class="bg-gray-50 text-gray-900 dark:bg-slate-950 dark:text-gray-100 antialiased selection:bg-indigo-500 selection:text-white overflow-hidden fixed inset-0">
+    <div id="root" class="h-full w-full"></div>
   </body>
 </html>

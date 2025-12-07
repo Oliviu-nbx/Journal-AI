@@ -1,7 +1,7 @@
-
 import React, { useEffect, useRef, useState } from 'react';
 import { connectLiveSession } from '../services/ai';
 import { JournalEntry, Persona, VoiceName, Goal, Task, AIConfig, UserProfile } from '../types';
+import { X, MicOff, PhoneOff } from 'lucide-react';
 
 interface LiveSessionProps {
   entries: JournalEntry[]; 
@@ -42,10 +42,8 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
         ? activeTasks.map(t => `- [${t.type}] ${t.text}`).join('\n')
         : "No active tasks currently.";
       
-      // Extended User Profile Context
       const userName = userProfile?.name || "User";
       let profileContext = `User Name: ${userName}\n`;
-      
       if (userProfile) {
           if (userProfile.occupation) profileContext += `Occupation: ${userProfile.occupation}\n`;
           if (userProfile.ageRange) profileContext += `Age Group: ${userProfile.ageRange}\n`;
@@ -54,32 +52,25 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
           if (userProfile.primaryGoal) profileContext += `Primary Goal in Journaling: ${userProfile.primaryGoal}\n`;
           if (userProfile.struggles && userProfile.struggles.length > 0) profileContext += `Current Struggles: ${userProfile.struggles.join(', ')}\n`;
       }
-
       const finalUserContext = `${profileContext}\nRecent Journal History:\n${contextSummary}`;
 
       try {
-        // Setup MediaRecorder for user's input stream
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         mediaRecorderRef.current = new MediaRecorder(stream);
         mediaRecorderRef.current.ondataavailable = (event) => {
-          if (event.data.size > 0) {
-            audioChunksRef.current.push(event.data);
-          }
+          if (event.data.size > 0) audioChunksRef.current.push(event.data);
         };
         mediaRecorderRef.current.start();
 
         const session = await connectLiveSession(
           aiConfig,
           (audioBuffer) => {
-             // Simulate volume for visualizer
              let sum = 0;
              const data = audioBuffer.getChannelData(0);
-             const sampleStep = Math.floor(data.length / 50); // Sample fewer points for performance
+             const sampleStep = Math.floor(data.length / 50);
              for(let i=0; i<data.length; i+=sampleStep) sum += Math.abs(data[i]);
              const avg = sum / (data.length / sampleStep);
-             setVolume(Math.min(avg * 50, 100)); // Amplify a bit
-             
-             // Decay volume
+             setVolume(Math.min(avg * 50, 100));
              setTimeout(() => setVolume(v => v * 0.8), 100);
           },
           (userText, modelText) => {
@@ -90,13 +81,7 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
             console.error(err);
             setStatus('error');
           },
-          {
-            persona: persona,
-            voiceName: voiceName,
-            userContext: finalUserContext,
-            goalsContext: goalContext,
-            tasksContext: taskContext
-          }
+          { persona, voiceName, userContext: finalUserContext, goalsContext: goalContext, tasksContext: taskContext }
         );
         sessionRef.current = session;
         setStatus('active');
@@ -108,18 +93,12 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
     start();
     return () => { 
       active = false;
-      if (sessionRef.current && sessionRef.current.close) {
-          sessionRef.current.close();
-      }
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-        mediaRecorderRef.current.stop();
-      }
+      if (sessionRef.current && sessionRef.current.close) sessionRef.current.close();
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop();
     };
   }, []);
 
   const handleStop = () => {
-    // If running in Ollama mode, media recorder might not capture the AI voice, only user.
-    // For now, consistent behavior:
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.onstop = () => {
@@ -127,63 +106,53 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
         onSessionEnd(transcript, audioBlob);
       };
     } else {
-      onSessionEnd(transcript); // Fallback if recorder failed
+      onSessionEnd(transcript);
     }
   };
 
-  // 2. Futuristic Orb Visualizer
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-
     let animationId: number;
     let rotation = 0;
 
     const draw = () => {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-      
-      // Dynamic color based on Persona
-      let colorRGB = '99, 102, 241'; // Indigo (Nice)
-      if (persona === 'Motivational') colorRGB = '245, 158, 11'; // Amber
-      if (persona === 'Rude') colorRGB = '239, 68, 68'; // Red
+      // Resize logic to keep sharp on high DPI
+      const dpr = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width * dpr;
+      canvas.height = rect.height * dpr;
+      ctx.scale(dpr, dpr);
 
-      // Base radius
-      const baseR = 60;
+      ctx.clearRect(0, 0, rect.width, rect.height);
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+      
+      let colorRGB = '99, 102, 241';
+      if (persona === 'Motivational') colorRGB = '245, 158, 11';
+      if (persona === 'Rude') colorRGB = '239, 68, 68';
+
+      const baseR = Math.min(rect.width, rect.height) * 0.25; 
       const dynamicR = baseR + (volume * 1.5);
 
-      // Glow
       const gradient = ctx.createRadialGradient(cx, cy, baseR * 0.5, cx, cy, dynamicR * 1.5);
-      gradient.addColorStop(0, `rgba(${colorRGB}, 0.8)`);
-      gradient.addColorStop(0.5, `rgba(${colorRGB}, 0.2)`);
+      gradient.addColorStop(0, `rgba(${colorRGB}, 0.6)`);
       gradient.addColorStop(1, `rgba(${colorRGB}, 0)`);
-      
       ctx.fillStyle = gradient;
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillRect(0, 0, rect.width, rect.height);
 
-      // Core
       ctx.beginPath();
-      ctx.arc(cx, cy, baseR + (volume * 0.2), 0, Math.PI * 2);
+      ctx.arc(cx, cy, baseR + (volume * 0.3), 0, Math.PI * 2);
       ctx.fillStyle = `rgba(${colorRGB}, 0.9)`;
       ctx.fill();
 
-      // Orbital Rings
       rotation += 0.01 + (volume * 0.001);
-      
-      ctx.strokeStyle = `rgba(${colorRGB}, 0.4)`;
-      ctx.lineWidth = 2;
-      
-      // Ring 1
+      ctx.strokeStyle = `rgba(${colorRGB}, 0.5)`;
+      ctx.lineWidth = 3;
       ctx.beginPath();
       ctx.ellipse(cx, cy, dynamicR, dynamicR * 0.4, rotation, 0, Math.PI * 2);
-      ctx.stroke();
-
-      // Ring 2
-      ctx.beginPath();
-      ctx.ellipse(cx, cy, dynamicR * 0.8, dynamicR * 1.2, -rotation * 1.5, 0, Math.PI * 2);
       ctx.stroke();
 
       animationId = requestAnimationFrame(draw);
@@ -192,38 +161,36 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
     return () => cancelAnimationFrame(animationId);
   }, [volume, persona]);
 
-  // ACTIVE SESSION UI
   return (
-    <div className="flex flex-col items-center justify-center h-full relative animate-in fade-in zoom-in duration-500">
-      <div className="absolute top-0 w-full flex justify-between items-center p-4">
-         <div className="flex items-center space-x-2 bg-black/20 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">
+    <div className="fixed inset-0 z-50 bg-black flex flex-col items-center justify-between pb-10 pt-safe animate-fade-in">
+      <div className="w-full flex justify-between items-center px-6 mt-4">
+         <button onClick={onCancel} className="p-3 bg-white/10 rounded-full backdrop-blur-md">
+             <X className="w-6 h-6 text-white" />
+         </button>
+         <div className="flex items-center space-x-2 bg-white/10 backdrop-blur-md px-4 py-1.5 rounded-full border border-white/10">
             <span className={`w-2 h-2 rounded-full ${status === 'active' ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'}`}></span>
-            <span className="text-xs font-mono text-white/80">LIVE // {aiConfig.provider.toUpperCase()}</span>
+            <span className="text-xs font-bold text-white tracking-widest uppercase">Live // {aiConfig.provider}</span>
          </div>
+         <div className="w-12"></div> {/* Spacer */}
       </div>
 
-      <div className="relative w-full max-w-sm aspect-square flex items-center justify-center mb-8">
-        <canvas ref={canvasRef} width={400} height={400} className="w-full h-full" />
+      <div className="w-full flex-1 flex flex-col items-center justify-center relative">
+        <div className="w-full h-[60vh]">
+             <canvas ref={canvasRef} className="w-full h-full" />
+        </div>
+        <div className="absolute bottom-10 w-full px-8 text-center">
+             <p className="text-white/70 text-lg font-serif animate-pulse">
+                {status === 'connecting' ? 'Establishing link...' : 'Listening...'}
+             </p>
+        </div>
       </div>
 
-      <div className="w-full max-w-md bg-black/5 dark:bg-white/5 backdrop-blur-sm rounded-xl border border-black/5 dark:border-white/5 p-4 mb-8 min-h-[100px] max-h-[150px] overflow-y-auto">
-         <p className="text-xs font-mono text-gray-400 mb-2 uppercase">Real-time Transcript</p>
-         <p className="text-sm text-gray-700 dark:text-gray-200 font-medium whitespace-pre-wrap leading-relaxed">
-            {transcript.split('\n').slice(-4).join('\n') || (status === 'connecting' ? "Establishing link..." : "Listening...")}
-         </p>
-      </div>
-
-      <div className="flex gap-4 w-full max-w-sm">
-        <button 
-          onClick={onCancel}
-          className="flex-1 py-4 rounded-2xl bg-gray-200 dark:bg-white/10 text-gray-700 dark:text-gray-300 font-bold hover:bg-gray-300 dark:hover:bg-white/20 transition-colors"
-        >
-          Cancel
-        </button>
+      <div className="w-full px-8 mb-safe">
         <button 
           onClick={handleStop}
-          className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-red-500 to-pink-600 text-white font-bold shadow-lg shadow-red-500/30 hover:scale-[1.02] transition-transform"
+          className="w-full py-5 rounded-[2rem] bg-red-500 text-white font-bold text-lg shadow-[0_0_30px_rgba(239,68,68,0.4)] hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center"
         >
+          <PhoneOff className="w-6 h-6 mr-3" />
           End Session
         </button>
       </div>
