@@ -15,6 +15,31 @@ export enum ViewMode {
 
 export type Persona = 'Nice' | 'Motivational' | 'Rude';
 export type VoiceName = 'Puck' | 'Kore' | 'Fenrir' | 'Charon' | 'Zephyr';
+export type ThemeColor = 'Neutral' | 'Emerald' | 'Sky' | 'Rose' | 'Amber' | 'Amethyst';
+
+export type AIProvider = 'gemini' | 'ollama';
+
+export interface AIConfig {
+  provider: AIProvider;
+  ollamaBaseUrl?: string; // e.g. http://localhost:11434
+  ollamaModel?: string; // e.g. deepseek-r1
+}
+
+export interface UserProfile {
+  name: string;
+  onboardedAt: string;
+  
+  // Detailed Profile
+  primaryGoal?: string;
+  struggles?: string[];
+  occupation?: string;
+  faith?: string;
+  relationshipStatus?: string;
+  ageRange?: string;
+  genderIdentity?: string;
+  referralSource?: string;
+  theme?: ThemeColor;
+}
 
 export interface GroundingMetadata {
   webUrl?: string;

@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
-import { ViewMode, JournalEntry, Goal, Task, UserStats, Badge, Persona, VoiceName } from './types';
+import { ViewMode, JournalEntry, Goal, Task, UserStats, Badge, Persona, VoiceName, UserProfile, AIConfig, ThemeColor } from './types';
 import LiveSession from './components/LiveSession';
 import TextSession from './components/TextSession';
 import InterviewSetup from './components/InterviewSetup';
@@ -9,10 +9,10 @@ import Onboarding from './components/Onboarding';
 import CalendarView from './components/CalendarView';
 import MoodChart from './components/MoodChart';
 import Settings from './components/Settings';
-import { saveLocalData, loadLocalData, saveAudioBlob, getAudioBlob, setOnboardingComplete } from './services/storage';
-import { syncDataToDrive, uploadAudioToDrive } from './services/googleDrive';
-import { Mic, BookOpen, Volume2, Plus, Calendar, Target, CheckSquare, Square, Moon, Sun, ArrowLeft, Trophy, Flame, Zap, Award, Star, Lock, Grid, List, Settings as SettingsIcon, Cloud, HardDrive, Check, ArrowRight } from 'lucide-react';
-import { generateSpeech } from './services/gemini';
+import { saveLocalData, loadLocalData, saveAudioBlob, getAudioBlob, setOnboardingComplete, setStorageMode } from './services/storage';
+import { syncDataToDrive, uploadAudioToDrive, initGoogleDrive, signInToDrive, fetchDataFromDrive, downloadAudioFromDrive } from './services/googleDrive';
+import { Mic, BookOpen, Volume2, Plus, Calendar, Target, CheckSquare, Square, Moon, Sun, ArrowLeft, Trophy, Flame, Zap, Award, Star, Lock, Grid, List, Settings as SettingsIcon, Cloud, HardDrive, Check, ArrowRight, Loader2 } from 'lucide-react';
+import { generateSpeech } from './services/ai';
 
 // Initial dummy data for fallback
 const DUMMY_ENTRIES: JournalEntry[] = [
@@ -66,15 +66,24 @@ const INITIAL_STATS: UserStats = {
   badges: [] 
 };
 
+const DEFAULT_AI_CONFIG: AIConfig = {
+    provider: 'gemini',
+};
+
 const App: React.FC = () => {
   const [mode, setMode] = useState<ViewMode>(ViewMode.LIST);
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [goals, setGoals] = useState<Goal[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [userStats, setUserStats] = useState<UserStats>(INITIAL_STATS);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [aiConfig, setAiConfig] = useState<AIConfig>(DEFAULT_AI_CONFIG);
+  const [theme, setTheme] = useState<ThemeColor>('Sky');
+
   const [currentEntry, setCurrentEntry] = useState<JournalEntry | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [showCloudPrompt, setShowCloudPrompt] = useState(false);
+  const [appLoading, setAppLoading] = useState(true);
   
   // Interview Config State
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
@@ -88,39 +97,99 @@ const App: React.FC = () => {
 
   // Load Data
   useEffect(() => {
-    const data = loadLocalData();
-    if (data.entries) {
-      setEntries(data.entries);
-      setGoals(data.goals || []);
-      setTasks(data.tasks || []);
-      setUserStats(data.stats || INITIAL_STATS);
-      setShowOnboarding(!data.onboardingDone);
-      
-      // Show cloud prompt if onboarding done but cloud not configured and not dismissed
-      if (data.onboardingDone && !localStorage.getItem('reflectai_cloud_sync_enabled') && !localStorage.getItem('reflectai_cloud_prompt_dismissed')) {
-          setShowCloudPrompt(true);
-      }
-    } else {
-      setEntries(DUMMY_ENTRIES);
-      setGoals(DUMMY_GOALS);
-      setTasks(DUMMY_TASKS);
-      setUserStats(INITIAL_STATS);
-      setShowOnboarding(true);
-    }
+    const initApp = async () => {
+        const localData = loadLocalData();
+        
+        // Load settings from local storage directly as they aren't part of the "Synced" bundle usually
+        const savedProfile = localStorage.getItem('reflectai_profile');
+        if(savedProfile) {
+            const parsedProfile = JSON.parse(savedProfile);
+            setUserProfile(parsedProfile);
+            if(parsedProfile.theme) setTheme(parsedProfile.theme);
+        }
+
+        const savedConfig = localStorage.getItem('reflectai_ai_config');
+        if(savedConfig) setAiConfig(JSON.parse(savedConfig));
+
+        // Handle Cloud Mode Logic
+        if (localData.storageMode === 'cloud') {
+             const clientId = localStorage.getItem('reflectai_gdrive_client_id');
+             const apiKey = localStorage.getItem('reflectai_gdrive_api_key');
+             
+             if (clientId && apiKey) {
+                 try {
+                     await initGoogleDrive(clientId, apiKey);
+                     await signInToDrive();
+                     const cloudData = await fetchDataFromDrive();
+                     
+                     if (cloudData) {
+                         setEntries(cloudData.entries || []);
+                         setGoals(cloudData.goals || []);
+                         setTasks(cloudData.tasks || []);
+                         setUserStats(cloudData.stats || INITIAL_STATS);
+                         // Sync local cache for redundancy
+                         saveLocalData(cloudData.entries, cloudData.goals, cloudData.tasks, cloudData.stats || INITIAL_STATS);
+                     } else {
+                         // Fallback to local if cloud is empty or error
+                         setEntries(localData.entries || []);
+                         setGoals(localData.goals || []);
+                         setTasks(localData.tasks || []);
+                         setUserStats(localData.stats || INITIAL_STATS);
+                     }
+                 } catch (e) {
+                     console.error("Cloud load failed", e);
+                     // Fallback to local
+                     setEntries(localData.entries || []);
+                     setGoals(localData.goals || []);
+                     setTasks(localData.tasks || []);
+                     setUserStats(localData.stats || INITIAL_STATS);
+                 }
+             }
+        } else {
+            // Local Mode
+            if (localData.entries) {
+                setEntries(localData.entries);
+                setGoals(localData.goals || []);
+                setTasks(localData.tasks || []);
+                setUserStats(localData.stats || INITIAL_STATS);
+            } else {
+                setEntries(DUMMY_ENTRIES);
+                setGoals(DUMMY_GOALS);
+                setTasks(DUMMY_TASKS);
+                setUserStats(INITIAL_STATS);
+                setShowOnboarding(true);
+            }
+        }
+
+        // Show onboarding if no profile found (even if entries exist - maybe migration or new feature)
+        if (!savedProfile || !localData.onboardingDone) {
+            setShowOnboarding(true);
+        } else if (localData.onboardingDone && !localStorage.getItem('reflectai_cloud_sync_enabled') && !localStorage.getItem('reflectai_cloud_prompt_dismissed')) {
+             setShowCloudPrompt(true);
+        }
+        
+        setAppLoading(false);
+    };
+
+    initApp();
   }, []);
 
   // Save Data & Sync
   useEffect(() => {
+    if (appLoading) return;
+
     if (entries.length > 0) {
       saveLocalData(entries, goals, tasks, userStats);
       
-      // Trigger Cloud Sync if enabled
-      if (localStorage.getItem('reflectai_cloud_sync_enabled') === 'true') {
-         // Debounce could be good here, but for now just sync
+      // Trigger Cloud Sync if enabled OR if in Cloud Mode
+      const isCloudMode = localStorage.getItem('reflectai_storage_mode') === 'cloud';
+      const isSyncEnabled = localStorage.getItem('reflectai_cloud_sync_enabled') === 'true';
+
+      if (isCloudMode || isSyncEnabled) {
          syncDataToDrive({ entries, goals, tasks, stats: userStats });
       }
     }
-  }, [entries, goals, tasks, userStats]);
+  }, [entries, goals, tasks, userStats, appLoading]);
 
   // Initialize Dark Mode
   useEffect(() => {
@@ -130,6 +199,34 @@ const App: React.FC = () => {
       document.documentElement.classList.remove('dark');
     }
   }, [darkMode]);
+  
+  // Re-read profile when navigating back from settings
+  useEffect(() => {
+      if(mode !== ViewMode.SETTINGS) {
+         const savedProfile = localStorage.getItem('reflectai_profile');
+         if(savedProfile) {
+             const p = JSON.parse(savedProfile);
+             setUserProfile(p);
+             if(p.theme) setTheme(p.theme);
+         }
+      }
+  }, [mode]);
+
+  const handleOnboardingComplete = (profile: UserProfile, config: AIConfig) => {
+      setUserProfile(profile);
+      setAiConfig(config);
+      if(profile.theme) setTheme(profile.theme);
+      localStorage.setItem('reflectai_profile', JSON.stringify(profile));
+      localStorage.setItem('reflectai_ai_config', JSON.stringify(config));
+      setOnboardingComplete();
+      setShowOnboarding(false);
+      setShowCloudPrompt(true);
+  };
+
+  const handleUpdateConfig = (config: AIConfig) => {
+      setAiConfig(config);
+      localStorage.setItem('reflectai_ai_config', JSON.stringify(config));
+  };
 
   // Gamification Logic
   const awardXP = (amount: number, message: string) => {
@@ -191,7 +288,9 @@ const App: React.FC = () => {
        entry.audioId = audioId;
        
        // Cloud Sync for Audio
-       if (localStorage.getItem('reflectai_cloud_sync_enabled') === 'true') {
+       const isCloudMode = localStorage.getItem('reflectai_storage_mode') === 'cloud';
+       const isSyncEnabled = localStorage.getItem('reflectai_cloud_sync_enabled') === 'true';
+       if (isCloudMode || isSyncEnabled) {
            uploadAudioToDrive(audioId, audioBlob);
        }
     }
@@ -268,13 +367,17 @@ const App: React.FC = () => {
     if (isPlayingAudio) return;
     setIsPlayingAudio(true);
     try {
-      const buffer = await generateSpeech(text);
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const source = ctx.createBufferSource();
-      source.buffer = buffer;
-      source.connect(ctx.destination);
-      source.onended = () => setIsPlayingAudio(false);
-      source.start();
+      const buffer = await generateSpeech(aiConfig, text);
+      if (buffer) {
+          const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          source.onended = () => setIsPlayingAudio(false);
+          source.start();
+      } else {
+          setTimeout(() => setIsPlayingAudio(false), 2000);
+      }
     } catch (e) {
       console.error(e);
       setIsPlayingAudio(false);
@@ -299,7 +402,20 @@ const App: React.FC = () => {
   const playEntryRecording = async (audioId: string) => {
     if (isPlayingAudio) return;
     try {
-        const blob = await getAudioBlob(audioId);
+        const isCloudMode = localStorage.getItem('reflectai_storage_mode') === 'cloud';
+        let blob = await getAudioBlob(audioId);
+        
+        // If local blob missing and we are in cloud mode, try to fetch
+        if (!blob && isCloudMode) {
+             const clientId = localStorage.getItem('reflectai_gdrive_client_id');
+             const apiKey = localStorage.getItem('reflectai_gdrive_api_key');
+             if(clientId && apiKey) {
+                 await initGoogleDrive(clientId, apiKey);
+                 await signInToDrive();
+                 blob = await downloadAudioFromDrive(audioId);
+             }
+        }
+
         if (blob) {
             const url = URL.createObjectURL(blob);
             const audio = new Audio(url);
@@ -307,7 +423,7 @@ const App: React.FC = () => {
             audio.play();
             audio.onended = () => setIsPlayingAudio(false);
         } else {
-            alert("Audio recording not found.");
+            alert("Audio recording not found locally or on drive.");
         }
     } catch (e) {
         console.error(e);
@@ -315,12 +431,21 @@ const App: React.FC = () => {
     }
   };
 
+  if (appLoading) {
+      return (
+          <div className="h-screen w-full flex flex-col items-center justify-center bg-gray-50 dark:bg-slate-950">
+              <Loader2 className="w-12 h-12 text-indigo-500 animate-spin mb-4" />
+              <p className="text-gray-500 font-mono">Loading your journal...</p>
+          </div>
+      );
+  }
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-gray-50 dark:bg-slate-950 transition-colors duration-300">
       
-      {showOnboarding && <Onboarding onComplete={() => { setShowOnboarding(false); setOnboardingComplete(); setShowCloudPrompt(true); }} />}
+      {showOnboarding && <Onboarding onComplete={handleOnboardingComplete} />}
 
-      {/* Cloud Sync Prompt Modal */}
+      {/* Storage Preference Prompt Modal */}
       {showCloudPrompt && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
               <div className="bg-white dark:bg-slate-900 max-w-md w-full rounded-2xl p-6 shadow-2xl border border-white/10 text-center">
@@ -329,7 +454,7 @@ const App: React.FC = () => {
                   </div>
                   <h3 className="text-2xl font-serif font-bold text-gray-900 dark:text-white mb-2">Storage Preference</h3>
                   <p className="text-gray-500 dark:text-gray-400 text-sm mb-8 leading-relaxed">
-                      Choose where you want to keep your journal data. You can enable cloud sync later in Settings.
+                      Choose where you want to keep your journal data. You can change this later in Settings.
                   </p>
                   
                   <div className="space-y-3">
@@ -350,7 +475,7 @@ const App: React.FC = () => {
                       </button>
 
                       <button 
-                         onClick={() => { setShowCloudPrompt(false); localStorage.setItem('reflectai_cloud_prompt_dismissed', 'true'); }}
+                         onClick={() => { setShowCloudPrompt(false); setStorageMode('local'); localStorage.setItem('reflectai_cloud_prompt_dismissed', 'true'); }}
                          className="w-full flex items-center justify-between p-4 bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 transition-all group"
                       >
                           <div className="flex items-center text-left">
@@ -459,10 +584,24 @@ const App: React.FC = () => {
       <div className="flex flex-1 overflow-hidden relative">
         {/* Desktop Sidebar */}
         <aside className="hidden md:flex w-64 flex-col border-r border-gray-200 dark:border-white/5 glass-panel h-full">
+           <div className="p-6 border-b border-gray-200 dark:border-white/5">
+                <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-lg mr-3 shadow-lg">
+                        {userProfile?.name.charAt(0) || 'U'}
+                    </div>
+                    <div>
+                        <div className="font-bold text-gray-900 dark:text-white truncate max-w-[120px]">{userProfile?.name || 'User'}</div>
+                        <div className="text-[10px] text-gray-500 uppercase font-bold flex items-center">
+                            <div className={`w-2 h-2 rounded-full mr-1 ${aiConfig.provider === 'gemini' ? 'bg-blue-500' : 'bg-orange-500'}`}></div>
+                            {aiConfig.provider === 'gemini' ? 'Gemini' : 'Ollama'}
+                        </div>
+                    </div>
+                </div>
+           </div>
            <nav className="flex-1 p-4 space-y-2">
              <button 
                 onClick={() => setMode(ViewMode.LIST)}
-                className={`w-full flex items-center p-3 rounded-xl transition-all ${mode === ViewMode.LIST || mode === ViewMode.CALENDAR || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 ring-1 ring-indigo-500/20' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                className={`w-full flex items-center p-3 rounded-xl transition-all ${mode === ViewMode.LIST || mode === ViewMode.CALENDAR || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE || mode === ViewMode.LIVE_SESSION ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 ring-1 ring-indigo-500/20' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
              >
                 <Calendar className="w-5 h-5 mr-3" />
                 <span className="font-medium">Journal</span>
@@ -505,11 +644,11 @@ const App: React.FC = () => {
 
            {/* Dynamic Views */}
            {mode === ViewMode.INTERVIEW_SETUP && (
-               <InterviewSetup onStart={startInterview} onCancel={() => setMode(ViewMode.LIST)} />
+               <InterviewSetup onStart={startInterview} onCancel={() => setMode(ViewMode.LIST)} aiConfig={aiConfig} />
            )}
 
            {mode === ViewMode.SETTINGS && (
-               <Settings onBack={() => setMode(ViewMode.LIST)} />
+               <Settings onBack={() => setMode(ViewMode.LIST)} currentConfig={aiConfig} onUpdateConfig={handleUpdateConfig} />
            )}
 
            {mode === ViewMode.LIVE_SESSION && (
@@ -520,6 +659,8 @@ const App: React.FC = () => {
                  tasks={tasks}
                  persona={activePersona}
                  voiceName={activeVoice}
+                 aiConfig={aiConfig}
+                 userProfile={userProfile}
                  onSessionEnd={handleSessionEnd}
                  onCancel={() => setMode(ViewMode.LIST)}
                />
@@ -533,6 +674,8 @@ const App: React.FC = () => {
                    goals={goals}
                    tasks={tasks}
                    persona={activePersona}
+                   aiConfig={aiConfig}
+                   userProfile={userProfile}
                    onSessionEnd={handleSessionEnd}
                    onCancel={() => setMode(ViewMode.LIST)}
                  />
@@ -545,6 +688,7 @@ const App: React.FC = () => {
                recordedAudio={liveAudioBlob}
                currentGoals={goals}
                currentTasks={tasks}
+               aiConfig={aiConfig}
                onSave={handleSaveEntry}
                onCancel={() => setMode(ViewMode.LIST)}
              />
@@ -733,7 +877,7 @@ const App: React.FC = () => {
              <div className="max-w-2xl mx-auto animate-in fade-in duration-500">
                <div className="mb-8 flex justify-between items-center">
                  <div>
-                   <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{getGreeting()}, User.</h2>
+                   <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{getGreeting()}, {userProfile?.name || 'User'}.</h2>
                    <p className="text-gray-500 dark:text-gray-400 mt-1">Ready to reflect on your journey?</p>
                  </div>
                  <button onClick={() => setMode(ViewMode.CALENDAR)} className="p-3 rounded-full bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 hidden md:block">

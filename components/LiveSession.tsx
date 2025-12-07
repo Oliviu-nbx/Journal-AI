@@ -1,7 +1,7 @@
 
 import React, { useEffect, useRef, useState } from 'react';
-import { connectLiveSession } from '../services/gemini';
-import { JournalEntry, Persona, VoiceName, Goal, Task } from '../types';
+import { connectLiveSession } from '../services/ai';
+import { JournalEntry, Persona, VoiceName, Goal, Task, AIConfig, UserProfile } from '../types';
 
 interface LiveSessionProps {
   entries: JournalEntry[]; 
@@ -9,11 +9,13 @@ interface LiveSessionProps {
   tasks: Task[];
   persona: Persona;
   voiceName: VoiceName;
+  aiConfig: AIConfig;
+  userProfile: UserProfile | null;
   onSessionEnd: (transcript: string, audioBlob?: Blob) => void;
   onCancel: () => void;
 }
 
-const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, persona, voiceName, onSessionEnd, onCancel }) => {
+const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, persona, voiceName, aiConfig, userProfile, onSessionEnd, onCancel }) => {
   const [status, setStatus] = useState<'connecting' | 'active' | 'error'>('connecting');
   const [transcript, setTranscript] = useState<string>('');
   const [volume, setVolume] = useState<number>(0);
@@ -39,6 +41,21 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
       const taskContext = activeTasks.length > 0
         ? activeTasks.map(t => `- [${t.type}] ${t.text}`).join('\n')
         : "No active tasks currently.";
+      
+      // Extended User Profile Context
+      const userName = userProfile?.name || "User";
+      let profileContext = `User Name: ${userName}\n`;
+      
+      if (userProfile) {
+          if (userProfile.occupation) profileContext += `Occupation: ${userProfile.occupation}\n`;
+          if (userProfile.ageRange) profileContext += `Age Group: ${userProfile.ageRange}\n`;
+          if (userProfile.relationshipStatus) profileContext += `Relationship Status: ${userProfile.relationshipStatus}\n`;
+          if (userProfile.faith) profileContext += `Faith/Spirituality: ${userProfile.faith}\n`;
+          if (userProfile.primaryGoal) profileContext += `Primary Goal in Journaling: ${userProfile.primaryGoal}\n`;
+          if (userProfile.struggles && userProfile.struggles.length > 0) profileContext += `Current Struggles: ${userProfile.struggles.join(', ')}\n`;
+      }
+
+      const finalUserContext = `${profileContext}\nRecent Journal History:\n${contextSummary}`;
 
       try {
         // Setup MediaRecorder for user's input stream
@@ -52,13 +69,17 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
         mediaRecorderRef.current.start();
 
         const session = await connectLiveSession(
+          aiConfig,
           (audioBuffer) => {
              // Simulate volume for visualizer
              let sum = 0;
              const data = audioBuffer.getChannelData(0);
-             for(let i=0; i<data.length; i+=100) sum += Math.abs(data[i]);
-             const avg = sum / (data.length/100);
+             const sampleStep = Math.floor(data.length / 50); // Sample fewer points for performance
+             for(let i=0; i<data.length; i+=sampleStep) sum += Math.abs(data[i]);
+             const avg = sum / (data.length / sampleStep);
              setVolume(Math.min(avg * 50, 100)); // Amplify a bit
+             
+             // Decay volume
              setTimeout(() => setVolume(v => v * 0.8), 100);
           },
           (userText, modelText) => {
@@ -72,7 +93,7 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
           {
             persona: persona,
             voiceName: voiceName,
-            userContext: contextSummary || "No previous journal entries found.",
+            userContext: finalUserContext,
             goalsContext: goalContext,
             tasksContext: taskContext
           }
@@ -80,12 +101,16 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
         sessionRef.current = session;
         setStatus('active');
       } catch (e) {
+        console.error(e);
         setStatus('error');
       }
     };
     start();
     return () => { 
       active = false;
+      if (sessionRef.current && sessionRef.current.close) {
+          sessionRef.current.close();
+      }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
@@ -93,6 +118,8 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
   }, []);
 
   const handleStop = () => {
+    // If running in Ollama mode, media recorder might not capture the AI voice, only user.
+    // For now, consistent behavior:
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
       mediaRecorderRef.current.onstop = () => {
@@ -170,8 +197,8 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
     <div className="flex flex-col items-center justify-center h-full relative animate-in fade-in zoom-in duration-500">
       <div className="absolute top-0 w-full flex justify-between items-center p-4">
          <div className="flex items-center space-x-2 bg-black/20 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-            <span className="text-xs font-mono text-white/80">LIVE // {persona.toUpperCase()}</span>
+            <span className={`w-2 h-2 rounded-full ${status === 'active' ? 'bg-red-500 animate-pulse' : 'bg-yellow-500'}`}></span>
+            <span className="text-xs font-mono text-white/80">LIVE // {aiConfig.provider.toUpperCase()}</span>
          </div>
       </div>
 

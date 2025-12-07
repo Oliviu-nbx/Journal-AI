@@ -4,7 +4,9 @@ import { createPcmBlob, decodeBase64, decodeAudioData } from "./audioUtils";
 import { Persona, VoiceName, Goal, Task } from "../types";
 
 // Initialize AI Client
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Note: In a real app, API Key should be dynamic or env var. 
+// For now, assuming process.env.API_KEY is available or injected.
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
 
 const getSystemInstruction = (
   persona: Persona,

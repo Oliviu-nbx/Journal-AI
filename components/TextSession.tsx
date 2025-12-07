@@ -1,8 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Chat, GenerateContentResponse } from "@google/genai";
-import { createChatSession } from '../services/gemini';
-import { JournalEntry, Goal, Task, Persona, ChatMessage } from '../types';
+import { createUnifiedChatSession } from '../services/ai';
+import { JournalEntry, Goal, Task, Persona, ChatMessage, AIConfig, UserProfile } from '../types';
 import { Send, User, Bot, X } from 'lucide-react';
 
 interface TextSessionProps {
@@ -10,15 +9,17 @@ interface TextSessionProps {
   goals: Goal[];
   tasks: Task[];
   persona: Persona;
+  aiConfig: AIConfig;
+  userProfile: UserProfile | null;
   onSessionEnd: (transcript: string) => void;
   onCancel: () => void;
 }
 
-const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, persona, onSessionEnd, onCancel }) => {
+const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, persona, aiConfig, userProfile, onSessionEnd, onCancel }) => {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const chatRef = useRef<Chat | null>(null);
+  const chatRef = useRef<any>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   // Initialize Chat
@@ -36,10 +37,25 @@ const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, person
     const taskContext = activeTasks.length > 0
       ? activeTasks.map(t => `- [${t.type}] ${t.text}`).join('\n')
       : "No active tasks currently.";
+    
+    // Extended User Profile Context
+    const userName = userProfile?.name || "User";
+    let profileContext = `User Name: ${userName}\n`;
+    
+    if (userProfile) {
+        if (userProfile.occupation) profileContext += `Occupation: ${userProfile.occupation}\n`;
+        if (userProfile.ageRange) profileContext += `Age Group: ${userProfile.ageRange}\n`;
+        if (userProfile.relationshipStatus) profileContext += `Relationship Status: ${userProfile.relationshipStatus}\n`;
+        if (userProfile.faith) profileContext += `Faith/Spirituality: ${userProfile.faith}\n`;
+        if (userProfile.primaryGoal) profileContext += `Primary Goal in Journaling: ${userProfile.primaryGoal}\n`;
+        if (userProfile.struggles && userProfile.struggles.length > 0) profileContext += `Current Struggles: ${userProfile.struggles.join(', ')}\n`;
+    }
 
-    const chat = createChatSession({
+    const finalUserContext = `${profileContext}\nRecent Journal History:\n${contextSummary}`;
+
+    const chat = createUnifiedChatSession(aiConfig, {
         persona,
-        userContext: contextSummary,
+        userContext: finalUserContext,
         goalsContext: goalContext,
         tasksContext: taskContext
     });
@@ -49,10 +65,11 @@ const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, person
     const startConversation = async () => {
         setIsLoading(true);
         try {
-            const response = await chat.sendMessage({ message: "Start the interview now." });
-            setMessages([{ role: 'model', text: response.text || "Hello! Ready to reflect?", timestamp: Date.now() }]);
+            const response = await chat.sendMessage("Start the interview now. Greet the user.");
+            setMessages([{ role: 'model', text: response || "Hello! Ready to reflect?", timestamp: Date.now() }]);
         } catch (e) {
             console.error(e);
+            setMessages([{ role: 'model', text: "Hello! Ready to reflect?", timestamp: Date.now() }]);
         } finally {
             setIsLoading(false);
         }
@@ -76,8 +93,8 @@ const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, person
     setIsLoading(true);
 
     try {
-        const response: GenerateContentResponse = await chatRef.current.sendMessage({ message: userMsg });
-        setMessages(prev => [...prev, { role: 'model', text: response.text || "...", timestamp: Date.now() }]);
+        const responseText = await chatRef.current.sendMessage(userMsg);
+        setMessages(prev => [...prev, { role: 'model', text: responseText || "...", timestamp: Date.now() }]);
     } catch (e) {
         console.error(e);
         setMessages(prev => [...prev, { role: 'system', text: "Error communicating with AI.", timestamp: Date.now() }]);
@@ -104,7 +121,7 @@ const TextSession: React.FC<TextSessionProps> = ({ entries, goals, tasks, person
         <div className="p-4 bg-gray-100/50 dark:bg-white/5 border-b border-gray-200 dark:border-white/10 flex justify-between items-center">
             <div className="flex items-center gap-3">
                 <div className={`w-3 h-3 rounded-full ${isLoading ? 'bg-indigo-500 animate-pulse' : 'bg-green-500'}`}></div>
-                <span className="font-bold text-gray-700 dark:text-gray-200">ReflectAI <span className="text-xs font-normal opacity-70">({persona})</span></span>
+                <span className="font-bold text-gray-700 dark:text-gray-200">ReflectAI <span className="text-xs font-normal opacity-70">({persona} / {aiConfig.provider})</span></span>
             </div>
             <button onClick={onCancel} className="p-2 hover:bg-gray-200 dark:hover:bg-white/10 rounded-full transition-colors">
                 <X className="w-5 h-5 text-gray-500" />

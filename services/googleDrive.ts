@@ -185,3 +185,65 @@ export const uploadAudioToDrive = async (id: string, audioBlob: Blob) => {
         console.error("Audio Upload Error", e);
     }
 };
+
+// --- MIGRATION HELPERS ---
+
+export const fetchDataFromDrive = async (): Promise<any> => {
+    const folderId = await findOrCreateFolder();
+    const query = `name='data.json' and '${folderId}' in parents and trashed=false`;
+    const listResponse = await (window as any).gapi.client.drive.files.list({
+       q: query,
+       fields: 'files(id)'
+    });
+    
+    if (listResponse.result.files.length === 0) return null;
+
+    const fileId = listResponse.result.files[0].id;
+    const response = await (window as any).gapi.client.drive.files.get({
+        fileId: fileId,
+        alt: 'media'
+    });
+    return response.result;
+};
+
+export const downloadAudioFromDrive = async (id: string): Promise<Blob | null> => {
+    const folderId = await findOrCreateFolder();
+    const filename = `${id}.webm`;
+    const query = `name='${filename}' and '${folderId}' in parents and trashed=false`;
+    const listResponse = await (window as any).gapi.client.drive.files.list({
+        q: query,
+        fields: 'files(id)'
+    });
+
+    if (listResponse.result.files.length === 0) return null;
+
+    const fileId = listResponse.result.files[0].id;
+    const accessToken = (window as any).gapi.client.getToken().access_token;
+    
+    // Fetch raw blob
+    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+        headers: { 'Authorization': 'Bearer ' + accessToken }
+    });
+    return await res.blob();
+};
+
+export const deleteAllRemoteData = async () => {
+    const folderId = await findOrCreateFolder();
+    const query = `'${folderId}' in parents and trashed=false`;
+    let pageToken = null;
+    
+    do {
+        const res: any = await (window as any).gapi.client.drive.files.list({
+            q: query,
+            fields: 'nextPageToken, files(id)',
+            pageToken: pageToken
+        });
+        const files = res.result.files;
+        if(files) {
+            for(const file of files) {
+                await (window as any).gapi.client.drive.files.delete({ fileId: file.id });
+            }
+        }
+        pageToken = res.result.nextPageToken;
+    } while (pageToken);
+};

@@ -1,21 +1,23 @@
 
 import React, { useState } from 'react';
-import { JournalEntry, Goal, Task } from '../types';
-import { synthesizeJournalEntry, editJournalImage, getGroundedContext } from '../services/gemini';
-import { Image as ImageIcon, Sparkles, Wand2, Search, CheckSquare, Play, Pause } from 'lucide-react';
+import { JournalEntry, Goal, Task, AIConfig } from '../types';
+import { synthesizeJournalEntry, editImage, getGrounding, generateSpeech } from '../services/ai';
+import { Image as ImageIcon, Sparkles, Wand2, Search, CheckSquare, Play, Pause, Lock, AlertCircle } from 'lucide-react';
 
 interface ComposeEntryProps {
   initialTranscript?: string;
   recordedAudio?: Blob;
   currentGoals: Goal[];
   currentTasks: Task[];
+  aiConfig: AIConfig;
   onSave: (entry: JournalEntry, newGoals: Goal[], newTasks: Task[], completedGoalIds: string[], completedTaskIds: string[], audioBlob?: Blob) => void;
   onCancel: () => void;
 }
 
-const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recordedAudio, currentGoals, currentTasks, onSave, onCancel }) => {
+const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recordedAudio, currentGoals, currentTasks, aiConfig, onSave, onCancel }) => {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [step, setStep] = useState<'draft' | 'review'>(initialTranscript ? 'review' : 'draft');
+  const isLocal = aiConfig.provider === 'ollama';
   
   const [rawText, setRawText] = useState(initialTranscript || '');
   const [imageData, setImageData] = useState<string | null>(null);
@@ -43,9 +45,13 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
 
   const handleImageEdit = async () => {
     if (!imageData || !imagePrompt) return;
+    if (isLocal) {
+        alert("Image editing is only available with Gemini.");
+        return;
+    }
     setIsEditingImage(true);
     try {
-      const newImageBase64 = await editJournalImage(imageData, imagePrompt);
+      const newImageBase64 = await editImage(aiConfig, imageData, imagePrompt);
       if (newImageBase64) {
         setImageData(newImageBase64);
         setImagePrompt('');
@@ -59,8 +65,12 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
 
   const handleGroundingSearch = async () => {
      if(!rawText) return;
+     if (isLocal) {
+        alert("Search Grounding is only available with Gemini.");
+        return;
+    }
      try {
-       const result = await getGroundedContext(rawText.slice(0, 100));
+       const result = await getGrounding(aiConfig, rawText.slice(0, 100));
        setGroundingInfo(result);
      } catch(e) {
        console.error(e);
@@ -71,7 +81,7 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
     setIsSynthesizing(true);
     try {
       // Pass existing items to let AI check for completion
-      const data = await synthesizeJournalEntry(rawText, currentGoals, currentTasks);
+      const data = await synthesizeJournalEntry(aiConfig, rawText, currentGoals, currentTasks);
       setStructuredEntry(data);
       setGeneratedGoals(data.generatedGoals || []);
       setGeneratedTasks(data.generatedTasks || []);
@@ -80,7 +90,7 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
       setStep('review');
     } catch (e) {
       console.error(e);
-      alert("Synthesis failed.");
+      alert("Synthesis failed. Check if your AI service is reachable.");
     } finally {
       setIsSynthesizing(false);
     }
@@ -273,22 +283,25 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
         <div className="flex items-center justify-between px-4 pb-4 border-t border-gray-100 dark:border-white/5 pt-3">
            <button 
              onClick={handleGroundingSearch}
-             className="flex items-center text-xs font-bold text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 px-3 py-1.5 rounded-full hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-colors"
+             disabled={isLocal}
+             className={`flex items-center text-xs font-bold px-3 py-1.5 rounded-full transition-colors ${isLocal ? 'bg-gray-100 dark:bg-white/5 text-gray-400 cursor-not-allowed' : 'text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-500/10 hover:bg-blue-100 dark:hover:bg-blue-500/20'}`}
            >
-             <Search className="w-3 h-3 mr-1.5" /> Check Facts
+             {isLocal ? <Lock className="w-3 h-3 mr-1.5"/> : <Search className="w-3 h-3 mr-1.5" />}
+             Check Facts {isLocal && '(Gemini Only)'}
            </button>
            <span className="text-xs text-gray-400 font-mono">{rawText.length} chars</span>
         </div>
       </div>
 
-      <div className="glass-panel p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-white/10 mb-6">
+      <div className={`glass-panel p-6 rounded-2xl shadow-sm border border-gray-200 dark:border-white/10 mb-6 ${isLocal ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold text-gray-700 dark:text-gray-200 flex items-center">
-            <ImageIcon className="w-5 h-5 mr-2" /> Attachment
+            {isLocal ? <Lock className="w-4 h-4 mr-2" /> : <ImageIcon className="w-5 h-5 mr-2" />} 
+            Attachment {isLocal && <span className="text-xs font-normal text-red-500 ml-2">(Cloud Only)</span>}
           </h3>
-          <label className="cursor-pointer text-sm text-indigo-600 dark:text-indigo-400 hover:underline font-medium">
+          <label className={`cursor-pointer text-sm text-indigo-600 dark:text-indigo-400 hover:underline font-medium ${isLocal ? 'cursor-not-allowed text-gray-400' : ''}`}>
             Upload Photo
-            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} />
+            <input type="file" accept="image/*" className="hidden" onChange={handleImageUpload} disabled={isLocal} />
           </label>
         </div>
 
@@ -298,7 +311,7 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
                 <img src={`data:image/jpeg;base64,${imageData}`} className="w-full h-auto" alt="Preview" />
              </div>
              <div className="w-full md:w-1/2 flex flex-col justify-center space-y-4">
-                <p className="text-sm text-gray-500 dark:text-gray-400">Gemini Magic Editor</p>
+                <p className="text-sm text-gray-500 dark:text-gray-400">{isLocal ? 'Image Editing Disabled' : 'Gemini Magic Editor'}</p>
                 <div className="flex gap-2">
                    <input 
                       type="text" 
@@ -306,10 +319,11 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recorded
                       className="flex-1 bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-indigo-500 text-gray-900 dark:text-white"
                       value={imagePrompt}
                       onChange={(e) => setImagePrompt(e.target.value)}
+                      disabled={isLocal}
                    />
                    <button 
                       onClick={handleImageEdit}
-                      disabled={isEditingImage || !imagePrompt}
+                      disabled={isEditingImage || !imagePrompt || isLocal}
                       className="bg-indigo-600 text-white p-3 rounded-xl disabled:opacity-50 hover:bg-indigo-700 transition-colors"
                    >
                      {isEditingImage ? <Sparkles className="w-5 h-5 animate-pulse"/> : <Wand2 className="w-5 h-5"/>}

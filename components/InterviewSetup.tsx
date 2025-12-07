@@ -1,15 +1,17 @@
 
 import React, { useState } from 'react';
-import { Persona, VoiceName } from '../types';
-import { User, Volume2, ArrowRight, MessageSquare, Mic } from 'lucide-react';
+import { Persona, VoiceName, AIConfig } from '../types';
+import { User, Volume2, ArrowRight, MessageSquare, Mic, Lock } from 'lucide-react';
 
 interface InterviewSetupProps {
   onStart: (mode: 'TEXT' | 'VOICE', persona: Persona, voice: VoiceName) => void;
   onCancel: () => void;
+  aiConfig: AIConfig;
 }
 
-const InterviewSetup: React.FC<InterviewSetupProps> = ({ onStart, onCancel }) => {
-  const [selectedMode, setSelectedMode] = useState<'TEXT' | 'VOICE'>('VOICE');
+const InterviewSetup: React.FC<InterviewSetupProps> = ({ onStart, onCancel, aiConfig }) => {
+  const isLocal = aiConfig.provider === 'ollama';
+  const [selectedMode, setSelectedMode] = useState<'TEXT' | 'VOICE'>(isLocal ? 'TEXT' : 'VOICE');
   const [selectedPersona, setSelectedPersona] = useState<Persona>('Nice');
   const [selectedVoice, setSelectedVoice] = useState<VoiceName>('Puck');
 
@@ -27,14 +29,19 @@ const InterviewSetup: React.FC<InterviewSetupProps> = ({ onStart, onCancel }) =>
                 <label className="block text-xs font-bold text-gray-500 dark:text-gray-400 uppercase tracking-widest mb-3">Interview Mode</label>
                 <div className="grid grid-cols-2 gap-3">
                     <button
-                        onClick={() => setSelectedMode('VOICE')}
-                        className={`py-4 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                        onClick={() => !isLocal && setSelectedMode('VOICE')}
+                        disabled={isLocal}
+                        className={`py-4 rounded-xl text-sm font-medium transition-all flex items-center justify-center gap-2 relative ${
                            selectedMode === 'VOICE' 
                            ? 'bg-indigo-600 text-white shadow-lg' 
-                           : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/10'
+                           : isLocal 
+                               ? 'bg-gray-100 dark:bg-white/5 text-gray-400 cursor-not-allowed border border-gray-200 dark:border-white/5'
+                               : 'bg-gray-100 dark:bg-white/5 text-gray-600 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-white/10'
                         }`}
                       >
-                        <Mic className="w-4 h-4" /> Voice Call
+                        {isLocal ? <Lock className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                        Voice Call
+                        {isLocal && <span className="absolute -top-2 -right-2 bg-red-500 text-white text-[9px] px-2 py-0.5 rounded-full font-bold">Cloud Only</span>}
                     </button>
                     <button
                         onClick={() => setSelectedMode('TEXT')}
