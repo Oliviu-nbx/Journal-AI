@@ -1,6 +1,7 @@
 
 export enum ViewMode {
   LIST = 'LIST',
+  CALENDAR = 'CALENDAR',
   COMPOSE = 'COMPOSE',
   INTERVIEW_SETUP = 'INTERVIEW_SETUP',
   LIVE_SESSION = 'LIVE_SESSION',
@@ -8,7 +9,8 @@ export enum ViewMode {
   ENTRY_DETAIL = 'ENTRY_DETAIL',
   GOALS = 'GOALS',
   TASKS = 'TASKS',
-  PROFILE = 'PROFILE'
+  PROFILE = 'PROFILE',
+  SETTINGS = 'SETTINGS'
 }
 
 export type Persona = 'Nice' | 'Motivational' | 'Rude';
@@ -29,7 +31,7 @@ export interface JournalEntry {
   tags: string[];
   mood?: string;
   imageUrl?: string;
-  audioUrl?: string; // If we stored the recording (not fully impl in this demo, but field exists)
+  audioId?: string; // Reference to IndexedDB
   groundingData?: GroundingMetadata[];
 }
 

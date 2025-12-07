@@ -2,17 +2,18 @@
 import React, { useState } from 'react';
 import { JournalEntry, Goal, Task } from '../types';
 import { synthesizeJournalEntry, editJournalImage, getGroundedContext } from '../services/gemini';
-import { Image as ImageIcon, Sparkles, Wand2, Search, CheckSquare } from 'lucide-react';
+import { Image as ImageIcon, Sparkles, Wand2, Search, CheckSquare, Play, Pause } from 'lucide-react';
 
 interface ComposeEntryProps {
   initialTranscript?: string;
+  recordedAudio?: Blob;
   currentGoals: Goal[];
   currentTasks: Task[];
-  onSave: (entry: JournalEntry, newGoals: Goal[], newTasks: Task[], completedGoalIds: string[], completedTaskIds: string[]) => void;
+  onSave: (entry: JournalEntry, newGoals: Goal[], newTasks: Task[], completedGoalIds: string[], completedTaskIds: string[], audioBlob?: Blob) => void;
   onCancel: () => void;
 }
 
-const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, currentGoals, currentTasks, onSave, onCancel }) => {
+const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, recordedAudio, currentGoals, currentTasks, onSave, onCancel }) => {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
   const [step, setStep] = useState<'draft' | 'review'>(initialTranscript ? 'review' : 'draft');
   
@@ -27,6 +28,9 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, currentG
   const [generatedTasks, setGeneratedTasks] = useState<any[]>([]);
   const [completedGoalIds, setCompletedGoalIds] = useState<string[]>([]);
   const [completedTaskIds, setCompletedTaskIds] = useState<string[]>([]);
+  
+  const [isPlayingRecorded, setIsPlayingRecorded] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(recordedAudio ? URL.createObjectURL(recordedAudio) : null);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -82,6 +86,21 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, currentG
     }
   };
 
+  const togglePlayback = () => {
+    if (!audioUrl) return;
+    const audio = document.getElementById('recorded-playback') as HTMLAudioElement;
+    if (!audio) return;
+    
+    if (isPlayingRecorded) {
+      audio.pause();
+      setIsPlayingRecorded(false);
+    } else {
+      audio.play();
+      setIsPlayingRecorded(true);
+      audio.onended = () => setIsPlayingRecorded(false);
+    }
+  };
+
   const handleFinalSave = () => {
     if (!structuredEntry) return;
     const entry: JournalEntry = {
@@ -116,7 +135,7 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, currentG
       createdAt: new Date().toISOString()
     }));
 
-    onSave(entry, newGoals, newTasks, completedGoalIds, completedTaskIds);
+    onSave(entry, newGoals, newTasks, completedGoalIds, completedTaskIds, recordedAudio);
   };
 
   if (isSynthesizing) {
@@ -137,11 +156,22 @@ const ComposeEntry: React.FC<ComposeEntryProps> = ({ initialTranscript, currentG
     return (
       <div className="max-w-2xl mx-auto glass-panel p-8 rounded-3xl border border-white/20 dark:border-white/5 animate-in slide-in-from-right-8 duration-500">
         {/* Header */}
-        <div className="mb-8">
-          <span className="inline-block px-3 py-1 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg text-xs font-bold uppercase tracking-wider mb-2 border border-indigo-500/20">
-            {structuredEntry.mood || 'Reflective'}
-          </span>
-          <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{structuredEntry.title}</h2>
+        <div className="mb-8 flex justify-between items-start">
+          <div>
+            <span className="inline-block px-3 py-1 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 rounded-lg text-xs font-bold uppercase tracking-wider mb-2 border border-indigo-500/20">
+              {structuredEntry.mood || 'Reflective'}
+            </span>
+            <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{structuredEntry.title}</h2>
+          </div>
+          {audioUrl && (
+             <button 
+               onClick={togglePlayback}
+               className="p-3 rounded-full bg-gray-100 dark:bg-white/10 hover:bg-indigo-100 dark:hover:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 transition-colors"
+             >
+               {isPlayingRecorded ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+               <audio id="recorded-playback" src={audioUrl} className="hidden" />
+             </button>
+          )}
         </div>
 
         {/* Image */}

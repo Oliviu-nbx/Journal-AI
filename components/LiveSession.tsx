@@ -9,7 +9,7 @@ interface LiveSessionProps {
   tasks: Task[];
   persona: Persona;
   voiceName: VoiceName;
-  onSessionEnd: (transcript: string) => void;
+  onSessionEnd: (transcript: string, audioBlob?: Blob) => void;
   onCancel: () => void;
 }
 
@@ -19,6 +19,8 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
   const [volume, setVolume] = useState<number>(0);
   const sessionRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
 
   // 1. Session Logic
   useEffect(() => {
@@ -39,6 +41,16 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
         : "No active tasks currently.";
 
       try {
+        // Setup MediaRecorder for user's input stream
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorderRef.current = new MediaRecorder(stream);
+        mediaRecorderRef.current.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+        mediaRecorderRef.current.start();
+
         const session = await connectLiveSession(
           (audioBuffer) => {
              // Simulate volume for visualizer
@@ -72,8 +84,25 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
       }
     };
     start();
-    return () => { active = false; };
+    return () => { 
+      active = false;
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    };
   }, []);
+
+  const handleStop = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+      mediaRecorderRef.current.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        onSessionEnd(transcript, audioBlob);
+      };
+    } else {
+      onSessionEnd(transcript); // Fallback if recorder failed
+    }
+  };
 
   // 2. Futuristic Orb Visualizer
   useEffect(() => {
@@ -165,7 +194,7 @@ const LiveSession: React.FC<LiveSessionProps> = ({ entries, goals, tasks, person
           Cancel
         </button>
         <button 
-          onClick={() => onSessionEnd(transcript)}
+          onClick={handleStop}
           className="flex-1 py-4 rounded-2xl bg-gradient-to-r from-red-500 to-pink-600 text-white font-bold shadow-lg shadow-red-500/30 hover:scale-[1.02] transition-transform"
         >
           End Session

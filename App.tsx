@@ -5,10 +5,16 @@ import LiveSession from './components/LiveSession';
 import TextSession from './components/TextSession';
 import InterviewSetup from './components/InterviewSetup';
 import ComposeEntry from './components/ComposeEntry';
-import { Mic, BookOpen, Volume2, Plus, Calendar, Target, CheckSquare, Square, Moon, Sun, ArrowLeft, Trophy, Flame, Zap, Award, Star, Lock } from 'lucide-react';
+import Onboarding from './components/Onboarding';
+import CalendarView from './components/CalendarView';
+import MoodChart from './components/MoodChart';
+import Settings from './components/Settings';
+import { saveLocalData, loadLocalData, saveAudioBlob, getAudioBlob, setOnboardingComplete } from './services/storage';
+import { syncDataToDrive, uploadAudioToDrive } from './services/googleDrive';
+import { Mic, BookOpen, Volume2, Plus, Calendar, Target, CheckSquare, Square, Moon, Sun, ArrowLeft, Trophy, Flame, Zap, Award, Star, Lock, Grid, List, Settings as SettingsIcon, Cloud, HardDrive, Check, ArrowRight } from 'lucide-react';
 import { generateSpeech } from './services/gemini';
 
-// Initial dummy data
+// Initial dummy data for fallback
 const DUMMY_ENTRIES: JournalEntry[] = [
   {
     id: '1',
@@ -28,13 +34,6 @@ const DUMMY_GOALS: Goal[] = [
     type: 'Weekly',
     isCompleted: false,
     createdAt: new Date(Date.now() - 86400000).toISOString()
-  },
-  {
-    id: 'g2',
-    text: 'Drink 2L of water',
-    type: 'Daily',
-    isCompleted: true,
-    createdAt: new Date().toISOString()
   }
 ];
 
@@ -42,13 +41,6 @@ const DUMMY_TASKS: Task[] = [
   {
     id: 't1',
     text: 'Email the design team',
-    type: 'Daily',
-    isCompleted: false,
-    createdAt: new Date().toISOString()
-  },
-  {
-    id: 't2',
-    text: 'Review pull requests',
     type: 'Daily',
     isCompleted: false,
     createdAt: new Date().toISOString()
@@ -69,27 +61,66 @@ const INITIAL_STATS: UserStats = {
   currentStreak: 1,
   lastActiveDate: new Date().toISOString(),
   totalEntries: 1,
-  goalsCompleted: 1,
+  goalsCompleted: 0,
   tasksCompleted: 0,
-  badges: [] // Start with no badges unlocked for demo logic
+  badges: [] 
 };
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<ViewMode>(ViewMode.LIST);
-  const [entries, setEntries] = useState<JournalEntry[]>(DUMMY_ENTRIES);
-  const [goals, setGoals] = useState<Goal[]>(DUMMY_GOALS);
-  const [tasks, setTasks] = useState<Task[]>(DUMMY_TASKS);
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [goals, setGoals] = useState<Goal[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [userStats, setUserStats] = useState<UserStats>(INITIAL_STATS);
   const [currentEntry, setCurrentEntry] = useState<JournalEntry | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showCloudPrompt, setShowCloudPrompt] = useState(false);
   
   // Interview Config State
   const [liveTranscript, setLiveTranscript] = useState<string | null>(null);
+  const [liveAudioBlob, setLiveAudioBlob] = useState<Blob | undefined>(undefined);
   const [activePersona, setActivePersona] = useState<Persona>('Nice');
   const [activeVoice, setActiveVoice] = useState<VoiceName>('Puck');
 
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const [darkMode, setDarkMode] = useState(true);
   const [xpNotification, setXpNotification] = useState<{amount: number, message: string} | null>(null);
+
+  // Load Data
+  useEffect(() => {
+    const data = loadLocalData();
+    if (data.entries) {
+      setEntries(data.entries);
+      setGoals(data.goals || []);
+      setTasks(data.tasks || []);
+      setUserStats(data.stats || INITIAL_STATS);
+      setShowOnboarding(!data.onboardingDone);
+      
+      // Show cloud prompt if onboarding done but cloud not configured and not dismissed
+      if (data.onboardingDone && !localStorage.getItem('reflectai_cloud_sync_enabled') && !localStorage.getItem('reflectai_cloud_prompt_dismissed')) {
+          setShowCloudPrompt(true);
+      }
+    } else {
+      setEntries(DUMMY_ENTRIES);
+      setGoals(DUMMY_GOALS);
+      setTasks(DUMMY_TASKS);
+      setUserStats(INITIAL_STATS);
+      setShowOnboarding(true);
+    }
+  }, []);
+
+  // Save Data & Sync
+  useEffect(() => {
+    if (entries.length > 0) {
+      saveLocalData(entries, goals, tasks, userStats);
+      
+      // Trigger Cloud Sync if enabled
+      if (localStorage.getItem('reflectai_cloud_sync_enabled') === 'true') {
+         // Debounce could be good here, but for now just sync
+         syncDataToDrive({ entries, goals, tasks, stats: userStats });
+      }
+    }
+  }, [entries, goals, tasks, userStats]);
 
   // Initialize Dark Mode
   useEffect(() => {
@@ -152,10 +183,22 @@ const App: React.FC = () => {
   };
 
   // Handle saving a new entry and processing completion
-  const handleSaveEntry = (entry: JournalEntry, newGoals: Goal[], newTasks: Task[], completedGoalIds: string[], completedTaskIds: string[]) => {
-    setEntries([entry, ...entries]);
-    setGoals([...newGoals, ...goals]); 
-    setTasks([...newTasks, ...tasks]);
+  const handleSaveEntry = async (entry: JournalEntry, newGoals: Goal[], newTasks: Task[], completedGoalIds: string[], completedTaskIds: string[], audioBlob?: Blob) => {
+    // Audio Persistence
+    if (audioBlob) {
+       const audioId = `audio-${entry.id}`;
+       await saveAudioBlob(audioId, audioBlob);
+       entry.audioId = audioId;
+       
+       // Cloud Sync for Audio
+       if (localStorage.getItem('reflectai_cloud_sync_enabled') === 'true') {
+           uploadAudioToDrive(audioId, audioBlob);
+       }
+    }
+
+    setEntries(prev => [entry, ...prev]);
+    setGoals(prev => [...newGoals, ...prev]); 
+    setTasks(prev => [...newTasks, ...prev]);
     
     // Process Completions
     let completedGCount = 0;
@@ -196,14 +239,16 @@ const App: React.FC = () => {
     
     setMode(ViewMode.LIST);
     setLiveTranscript(null);
+    setLiveAudioBlob(undefined);
     checkAchievements();
   };
 
   // Handle ending a live/chat session
-  const handleSessionEnd = (transcript: string) => {
+  const handleSessionEnd = (transcript: string, audioBlob?: Blob) => {
     updateStreak();
     awardXP(30, "Session Completed");
     setLiveTranscript(transcript);
+    setLiveAudioBlob(audioBlob);
     setMode(ViewMode.COMPOSE);
   };
 
@@ -250,9 +295,80 @@ const App: React.FC = () => {
     return Math.min(Math.max(progress, 0), 100);
   };
 
+  // Audio Playback in Detail View
+  const playEntryRecording = async (audioId: string) => {
+    if (isPlayingAudio) return;
+    try {
+        const blob = await getAudioBlob(audioId);
+        if (blob) {
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+            setIsPlayingAudio(true);
+            audio.play();
+            audio.onended = () => setIsPlayingAudio(false);
+        } else {
+            alert("Audio recording not found.");
+        }
+    } catch (e) {
+        console.error(e);
+        alert("Error playing audio.");
+    }
+  };
+
   return (
     <div className="flex flex-col h-screen overflow-hidden bg-gray-50 dark:bg-slate-950 transition-colors duration-300">
       
+      {showOnboarding && <Onboarding onComplete={() => { setShowOnboarding(false); setOnboardingComplete(); setShowCloudPrompt(true); }} />}
+
+      {/* Cloud Sync Prompt Modal */}
+      {showCloudPrompt && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
+              <div className="bg-white dark:bg-slate-900 max-w-md w-full rounded-2xl p-6 shadow-2xl border border-white/10 text-center">
+                  <div className="w-16 h-16 bg-gradient-to-br from-indigo-500 to-cyan-500 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg shadow-indigo-500/30">
+                      <HardDrive className="w-8 h-8 text-white" />
+                  </div>
+                  <h3 className="text-2xl font-serif font-bold text-gray-900 dark:text-white mb-2">Storage Preference</h3>
+                  <p className="text-gray-500 dark:text-gray-400 text-sm mb-8 leading-relaxed">
+                      Choose where you want to keep your journal data. You can enable cloud sync later in Settings.
+                  </p>
+                  
+                  <div className="space-y-3">
+                      <button 
+                         onClick={() => { setShowCloudPrompt(false); setMode(ViewMode.SETTINGS); }}
+                         className="w-full flex items-center justify-between p-4 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-500/20 transition-all group"
+                      >
+                          <div className="flex items-center text-left">
+                              <div className="p-2.5 bg-blue-500 text-white rounded-lg mr-4 shadow-md shadow-blue-500/20">
+                                  <Cloud className="w-5 h-5" />
+                              </div>
+                              <div>
+                                  <span className="block font-bold text-gray-900 dark:text-white group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">Google Cloud</span>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">Secure backup & sync (Requires Setup)</span>
+                              </div>
+                          </div>
+                          <ArrowRight className="w-5 h-5 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                      </button>
+
+                      <button 
+                         onClick={() => { setShowCloudPrompt(false); localStorage.setItem('reflectai_cloud_prompt_dismissed', 'true'); }}
+                         className="w-full flex items-center justify-between p-4 bg-gray-50 dark:bg-white/5 border border-gray-200 dark:border-white/10 rounded-xl hover:bg-gray-100 dark:hover:bg-white/10 transition-all group"
+                      >
+                          <div className="flex items-center text-left">
+                              <div className="p-2.5 bg-gray-500 text-white rounded-lg mr-4 shadow-md">
+                                  <HardDrive className="w-5 h-5" />
+                              </div>
+                              <div>
+                                  <span className="block font-bold text-gray-900 dark:text-white">Device Only</span>
+                                  <span className="text-xs text-gray-500 dark:text-gray-400">Local storage, private & offline</span>
+                              </div>
+                          </div>
+                          <Check className="w-5 h-5 text-green-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* XP Notification Toast */}
       {xpNotification && (
         <div className="fixed top-20 left-1/2 transform -translate-x-1/2 z-50 animate-in fade-in slide-in-from-top-4 duration-300">
@@ -266,7 +382,7 @@ const App: React.FC = () => {
       {/* Top Bar (Mobile & Desktop) */}
       <header className="h-16 flex items-center justify-between px-4 md:px-8 border-b border-gray-200 dark:border-white/10 glass-panel z-20 sticky top-0 flex-shrink-0">
         <div className="flex items-center">
-           {mode !== ViewMode.LIST ? (
+           {mode !== ViewMode.LIST && mode !== ViewMode.CALENDAR ? (
               <button onClick={() => setMode(ViewMode.LIST)} className="mr-3 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-white/10">
                  <ArrowLeft className="w-6 h-6 text-gray-700 dark:text-gray-200" />
               </button>
@@ -318,7 +434,7 @@ const App: React.FC = () => {
            
            {/* Desktop Actions */}
            <div className="hidden md:flex gap-3">
-              {mode === ViewMode.LIST && (
+              {(mode === ViewMode.LIST || mode === ViewMode.CALENDAR) && (
                 <>
                   <button 
                     onClick={() => setMode(ViewMode.INTERVIEW_SETUP)}
@@ -328,7 +444,7 @@ const App: React.FC = () => {
                     Interview
                   </button>
                   <button 
-                    onClick={() => { setLiveTranscript(null); setMode(ViewMode.COMPOSE); }}
+                    onClick={() => { setLiveTranscript(null); setLiveAudioBlob(undefined); setMode(ViewMode.COMPOSE); }}
                     className="flex items-center px-4 py-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-700 transition-all shadow-lg shadow-indigo-600/30 font-medium text-sm"
                   >
                     <Plus className="w-4 h-4 mr-2" />
@@ -346,7 +462,7 @@ const App: React.FC = () => {
            <nav className="flex-1 p-4 space-y-2">
              <button 
                 onClick={() => setMode(ViewMode.LIST)}
-                className={`w-full flex items-center p-3 rounded-xl transition-all ${mode === ViewMode.LIST || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 ring-1 ring-indigo-500/20' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+                className={`w-full flex items-center p-3 rounded-xl transition-all ${mode === ViewMode.LIST || mode === ViewMode.CALENDAR || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE ? 'bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 ring-1 ring-indigo-500/20' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
              >
                 <Calendar className="w-5 h-5 mr-3" />
                 <span className="font-medium">Journal</span>
@@ -372,6 +488,13 @@ const App: React.FC = () => {
                 <Trophy className="w-5 h-5 mr-3" />
                 <span className="font-medium">Profile</span>
              </button>
+             <button 
+                onClick={() => setMode(ViewMode.SETTINGS)}
+                className={`w-full flex items-center p-3 rounded-xl transition-all ${mode === ViewMode.SETTINGS ? 'bg-gray-100 dark:bg-white/10 text-gray-900 dark:text-white ring-1 ring-white/20' : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-white/5'}`}
+             >
+                <SettingsIcon className="w-5 h-5 mr-3" />
+                <span className="font-medium">Settings</span>
+             </button>
            </nav>
         </aside>
 
@@ -383,6 +506,10 @@ const App: React.FC = () => {
            {/* Dynamic Views */}
            {mode === ViewMode.INTERVIEW_SETUP && (
                <InterviewSetup onStart={startInterview} onCancel={() => setMode(ViewMode.LIST)} />
+           )}
+
+           {mode === ViewMode.SETTINGS && (
+               <Settings onBack={() => setMode(ViewMode.LIST)} />
            )}
 
            {mode === ViewMode.LIVE_SESSION && (
@@ -415,6 +542,7 @@ const App: React.FC = () => {
            {mode === ViewMode.COMPOSE && (
              <ComposeEntry 
                initialTranscript={liveTranscript || ''}
+               recordedAudio={liveAudioBlob}
                currentGoals={goals}
                currentTasks={tasks}
                onSave={handleSaveEntry}
@@ -473,6 +601,11 @@ const App: React.FC = () => {
                        </div>
                     </div>
                   ))}
+               </div>
+
+               {/* MOOD CHART */}
+               <div className="mb-8">
+                  <MoodChart entries={entries} />
                </div>
 
                {/* Badges Section */}
@@ -575,11 +708,37 @@ const App: React.FC = () => {
              </div>
            )}
 
+           {mode === ViewMode.CALENDAR && (
+             <div className="max-w-2xl mx-auto">
+               <div className="mb-8 flex justify-between items-center">
+                 <div>
+                   <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">Timeline</h2>
+                   <p className="text-gray-500 dark:text-gray-400 mt-1">Your journey at a glance.</p>
+                 </div>
+                 <button onClick={() => setMode(ViewMode.LIST)} className="p-3 rounded-full bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10">
+                    <List className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                 </button>
+               </div>
+               <CalendarView 
+                 entries={entries} 
+                 onSelectDate={(id) => { 
+                    const entry = entries.find(e => e.id === id); 
+                    if(entry) { setCurrentEntry(entry); setMode(ViewMode.ENTRY_DETAIL); } 
+                 }} 
+               />
+             </div>
+           )}
+
            {mode === ViewMode.LIST && (
              <div className="max-w-2xl mx-auto animate-in fade-in duration-500">
-               <div className="mb-8">
-                 <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{getGreeting()}, User.</h2>
-                 <p className="text-gray-500 dark:text-gray-400 mt-1">Ready to reflect on your journey?</p>
+               <div className="mb-8 flex justify-between items-center">
+                 <div>
+                   <h2 className="text-3xl font-serif font-bold text-gray-900 dark:text-white">{getGreeting()}, User.</h2>
+                   <p className="text-gray-500 dark:text-gray-400 mt-1">Ready to reflect on your journey?</p>
+                 </div>
+                 <button onClick={() => setMode(ViewMode.CALENDAR)} className="p-3 rounded-full bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10 hidden md:block">
+                    <Grid className="w-5 h-5 text-gray-600 dark:text-gray-300" />
+                 </button>
                </div>
 
                {/* Mobile Action Buttons */}
@@ -592,7 +751,7 @@ const App: React.FC = () => {
                     <span className="text-xs font-bold uppercase tracking-wide">Interview</span>
                   </button>
                   <button 
-                    onClick={() => { setLiveTranscript(null); setMode(ViewMode.COMPOSE); }}
+                    onClick={() => { setLiveTranscript(null); setLiveAudioBlob(undefined); setMode(ViewMode.COMPOSE); }}
                     className="flex-1 flex flex-col items-center justify-center p-4 rounded-2xl glass-panel border border-indigo-500/30 text-indigo-600 dark:text-indigo-300"
                   >
                     <Plus className="w-6 h-6 mb-1" />
@@ -601,6 +760,12 @@ const App: React.FC = () => {
                </div>
 
                <div className="space-y-6">
+                 {entries.length === 0 && (
+                   <div className="text-center py-10 opacity-50">
+                      <BookOpen className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                      <p className="text-gray-500">No entries yet. Start writing!</p>
+                   </div>
+                 )}
                  {entries.map(entry => (
                    <div 
                       key={entry.id}
@@ -622,6 +787,9 @@ const App: React.FC = () => {
                      </p>
 
                      <div className="flex flex-wrap gap-2 mt-4 pt-4 border-t border-gray-100 dark:border-white/5">
+                        {entry.audioId && (
+                           <span className="flex items-center text-xs text-indigo-500 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-1 rounded"><Mic className="w-3 h-3 mr-1"/> Audio</span>
+                        )}
                         {entry.tags.map(tag => (
                           <span key={tag} className="text-xs text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-white/5 px-2 py-1 rounded">#{tag}</span>
                         ))}
@@ -637,12 +805,24 @@ const App: React.FC = () => {
                <div className="p-6 md:p-10">
                   <div className="flex justify-between items-center mb-6">
                      <span className="text-sm font-mono text-indigo-500 dark:text-indigo-400">{new Date(currentEntry.date).toLocaleDateString()}</span>
-                     <button 
-                        onClick={() => handleReadAloud(currentEntry.content)}
-                        className={`p-2 rounded-full transition-all ${isPlayingAudio ? 'bg-indigo-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.5)] animate-pulse' : 'bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300'}`}
-                     >
-                       <Volume2 className="w-5 h-5" />
-                     </button>
+                     <div className="flex gap-2">
+                       {currentEntry.audioId && (
+                          <button 
+                            onClick={() => playEntryRecording(currentEntry.audioId!)}
+                            className={`p-2 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-200 dark:hover:bg-indigo-500/30 transition-colors`}
+                            title="Play Recording"
+                          >
+                             <Mic className="w-5 h-5" />
+                          </button>
+                       )}
+                       <button 
+                          onClick={() => handleReadAloud(currentEntry.content)}
+                          className={`p-2 rounded-full transition-all ${isPlayingAudio ? 'bg-indigo-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.5)] animate-pulse' : 'bg-gray-100 dark:bg-white/10 text-gray-600 dark:text-gray-300'}`}
+                          title="Read Aloud"
+                       >
+                         <Volume2 className="w-5 h-5" />
+                       </button>
+                     </div>
                   </div>
                   
                   <h1 className="text-3xl md:text-4xl font-serif font-bold text-gray-900 dark:text-white mb-8 leading-tight">{currentEntry.title}</h1>
@@ -680,7 +860,7 @@ const App: React.FC = () => {
       <nav className="md:hidden h-16 bg-white/90 dark:bg-slate-900/90 backdrop-blur-lg border-t border-gray-200 dark:border-white/5 flex justify-around items-center px-2 z-30 fixed bottom-0 w-full pb-safe">
         <button 
           onClick={() => setMode(ViewMode.LIST)}
-          className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${mode === ViewMode.LIST || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE || mode === ViewMode.LIVE_SESSION ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500'}`}
+          className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${mode === ViewMode.LIST || mode === ViewMode.CALENDAR || mode === ViewMode.ENTRY_DETAIL || mode === ViewMode.COMPOSE || mode === ViewMode.LIVE_SESSION ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500'}`}
         >
           <Calendar className="w-6 h-6" />
           <span className="text-[10px] font-medium">Journal</span>
@@ -705,6 +885,13 @@ const App: React.FC = () => {
         >
           <Trophy className="w-6 h-6" />
           <span className="text-[10px] font-medium">Profile</span>
+        </button>
+        <button 
+          onClick={() => setMode(ViewMode.SETTINGS)}
+          className={`flex flex-col items-center justify-center w-full h-full space-y-1 ${mode === ViewMode.SETTINGS ? 'text-gray-900 dark:text-white' : 'text-gray-400 dark:text-gray-500'}`}
+        >
+          <SettingsIcon className="w-6 h-6" />
+          <span className="text-[10px] font-medium">Settings</span>
         </button>
       </nav>
     </div>

@@ -1,3 +1,4 @@
+
 import { Blob } from '@google/genai';
 
 // Convert base64 to Uint8Array
@@ -52,4 +53,10 @@ export function createPcmBlob(data: Float32Array, sampleRate: number = 16000): B
     data: encodeBase64(new Uint8Array(int16.buffer)),
     mimeType: `audio/pcm;rate=${sampleRate}`,
   };
+}
+
+export function formatDuration(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
