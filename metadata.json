@@ -1,0 +1,9 @@
+{
+  "name": "ReflectAI Journal",
+  "description": "An intelligent, conversational journal that interviews you about your day, synthesizes entries with deep reasoning, and allows for AI-powered image editing and voice interaction.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone",
+    "geolocation"
+  ]
+}
